@@ -87,3 +87,20 @@ ipcMain.handle('file:showInFolder', async (_event, filePath: string) => {
   shell.showItemInFolder(filePath)
   return { success: true }
 })
+
+ipcMain.handle('pdf:generateFromHtml', async (_event, html: string) => {
+  const printWin = new BrowserWindow({
+    show: false,
+    width: 900,
+    height: 1200,
+    webPreferences: { offscreen: true }
+  })
+  await printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+  const data = await printWin.webContents.printToPDF({
+    pageSize: 'A4',
+    margins: { top: 1.8, bottom: 1.5, left: 1.5, right: 1.5 },
+    printBackground: true
+  })
+  printWin.destroy()
+  return data
+})

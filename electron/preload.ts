@@ -108,6 +108,9 @@ const api = {
     open: (filePath: string) => ipcRenderer.invoke('file:open', filePath),
     showInFolder: (filePath: string) => ipcRenderer.invoke('file:showInFolder', filePath)
   },
+  pdf: {
+    generateFromHtml: (html: string) => ipcRenderer.invoke('pdf:generateFromHtml', html)
+  },
   settings: {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),

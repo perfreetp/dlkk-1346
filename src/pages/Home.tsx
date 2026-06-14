@@ -4,7 +4,7 @@ import {
   Plus, Search, Calendar, Clock, Users, MapPin,
   Play, FileText, ChevronRight, Video, Building, Radio,
   ChevronLeft, Filter, MoreVertical, Trash2, Lock, LockOpen,
-  CheckCircle, CheckSquare
+  CheckCircle, CheckSquare, Crown
 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn, formatDate, formatDateTime, formatTime, statusText, statusColor, avatarColor } from '@/utils'
@@ -312,11 +312,16 @@ export default function Home() {
                             {parts.slice(0, 4).map(p => (
                               <div
                                 key={p.id}
-                                className="w-7 h-7 rounded-full border-2 border-white flex items-center justify-center text-[11px] text-white font-medium"
+                                className="relative w-7 h-7 rounded-full border-2 border-white flex items-center justify-center text-[11px] text-white font-medium"
                                 style={{ background: avatarColor(p.name) }}
-                                title={p.name}
+                                title={`${p.name}${p.isHost ? '（主持人）' : ''}`}
                               >
                                 {p.name.charAt(0)}
+                                {p.isHost && (
+                                  <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-amber-400 border border-white flex items-center justify-center">
+                                    <Crown size={8} className="text-white" />
+                                  </div>
+                                )}
                               </div>
                             ))}
                             {parts.length > 4 && (

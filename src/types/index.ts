@@ -196,6 +196,9 @@ declare global {
         open: (filePath: string) => Promise<{ success: boolean; error?: string }>
         showInFolder: (filePath: string) => Promise<{ success: boolean }>
       }
+      pdf: {
+        generateFromHtml: (html: string) => Promise<Uint8Array>
+      }
       settings: {
         get: (key: string) => Promise<string | null>
         set: (key: string, value: string) => Promise<{ success: boolean }>

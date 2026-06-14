@@ -149,15 +149,17 @@ export default function Resources() {
   }
 
   const buildMeetingReport = async (m: Meeting) => {
-    const [parts, agendas, mins, tasks, atts, transcripts] = await Promise.all([
+    const [parts, agendas, mins, tasks, atts, transcripts, chats, shots] = await Promise.all([
       window.api.participants.getByMeeting(m.id),
       window.api.agendas.getByMeeting(m.id),
       window.api.minutes.getByMeeting(m.id),
       window.api.tasks.getByMeeting(m.id),
       window.api.attachments.getByMeeting(m.id),
-      window.api.transcripts.getByMeeting(m.id)
+      window.api.transcripts.getByMeeting(m.id),
+      window.api.chatMessages.getByMeeting(m.id),
+      window.api.screenshots.getByMeeting(m.id)
     ])
-    return { meeting: m, participants: parts, agendas, minutes: mins, tasks, attachments: atts, transcripts }
+    return { meeting: m, participants: parts, agendas, minutes: mins, tasks, attachments: atts, transcripts, chats, screenshots: shots }
   }
 
   const exportWord = async () => {
@@ -166,7 +168,23 @@ export default function Resources() {
     showToast(`正在生成《${m.title}》Word 文档...`)
     try {
       const data = await buildMeetingReport(m)
-      const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TabStopPosition, TabStopType, BorderStyle } = await import('docx')
+      const {
+        Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
+        Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType,
+        LevelFormat
+      } = await import('docx')
+
+      const h = (txt: string, level: any) => new Paragraph({
+        text: txt, heading: level, spacing: { before: 300, after: 180 }
+      })
+      const p = (runs: any[], opts?: any) => new Paragraph({
+        children: Array.isArray(runs) ? runs : [new TextRun(runs as any)],
+        spacing: { after: 80 },
+        ...opts
+      })
+      const run = (txt: string, opts?: any) => new TextRun({ text: txt, ...opts })
+      const border = { style: BorderStyle.SINGLE, size: 1, color: 'D0D5DD' }
+      const headerShading = { type: ShadingType.CLEAR, fill: 'F1F5F9', color: 'auto' }
 
       const children: any[] = []
 
@@ -174,135 +192,161 @@ export default function Resources() {
         text: m.title,
         heading: HeadingLevel.TITLE,
         alignment: AlignmentType.CENTER,
-        spacing: { after: 400 }
+        spacing: { after: 500 }
       }))
 
-      children.push(new Paragraph({
-        children: [
-          new TextRun({ text: '会议时间：', bold: true }),
-          new TextRun(`${formatDateTime(m.startTime)}${m.endTime ? ' ~ ' + formatDateTime(m.endTime) : ''}`)
-        ],
-        spacing: { after: 120 }
-      }))
-      children.push(new Paragraph({
-        children: [
-          new TextRun({ text: '会议地点：', bold: true }),
-          new TextRun(m.location || '-')
-        ],
-        spacing: { after: 120 }
-      }))
-      children.push(new Paragraph({
-        children: [
-          new TextRun({ text: '参会人员：', bold: true }),
-          new TextRun(data.participants.map(p => `${p.name}${p.role ? `(${p.role})` : ''}`).join('、') || '-')
-        ],
-        spacing: { after: 400 }
-      }))
+      children.push(p([run('会议时间：', { bold: true }), run(`${formatDateTime(m.startTime)}${m.endTime ? ' ~ ' + formatDateTime(m.endTime) : ''}`)]))
+      children.push(p([run('会议地点：', { bold: true }), run(m.location || '-')]))
+      children.push(p([run('参会人员：', { bold: true }), run(data.participants.map(p => `${p.name}${p.isHost ? '（主持人）' : ''}${p.role ? `【${p.role}】` : ''}`).join('、') || '-')], { spacing: { after: 400 } }))
 
-      children.push(new Paragraph({ text: '一、会议摘要', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      children.push(h('一、会议摘要', HeadingLevel.HEADING_1))
       if (data.minutes?.summary) {
         const summaries: string[] = JSON.parse(data.minutes.summary)
-        summaries.forEach((s, i) => {
-          children.push(new Paragraph({
-            children: [new TextRun(`${i + 1}. ${s}`)],
-            spacing: { after: 100 }
-          }))
-        })
+        summaries.forEach((s, i) => children.push(p(`${i + 1}. ${s}`)))
       } else {
-        children.push(new Paragraph({ text: '暂无摘要', spacing: { after: 100 } }))
+        children.push(p('（暂无摘要）', { italics: true } as any))
       }
 
-      children.push(new Paragraph({ text: '二、会议议题', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      children.push(h('二、会议议题', HeadingLevel.HEADING_1))
       if (data.agendas.length > 0) {
         data.agendas.forEach((a, i) => {
-          children.push(new Paragraph({
-            children: [new TextRun(`${i + 1}. ${a.title}`)],
-            spacing: { after: 80 }
-          }))
+          children.push(p(`${i + 1}. ${a.title}${a.status ? `  【${{ pending: '待讨论', in_progress: '进行中', completed: '已完成' }[a.status] || a.status}】` : ''}`))
         })
       } else {
-        children.push(new Paragraph({ text: '暂无议题' }))
+        children.push(p('（暂无议题）', { italics: true } as any))
       }
 
-      children.push(new Paragraph({ text: '三、待办事项', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      children.push(h('三、待办事项', HeadingLevel.HEADING_1))
       if (data.tasks.length > 0) {
-        data.tasks.forEach((t, i) => {
-          children.push(new Paragraph({
-            children: [
-              new TextRun(`${i + 1}. ${t.title}`),
-              new TextRun({ text: `  负责人：${t.assignee || '未分配'}`, color: '666666', size: 20 }),
-              new TextRun({ text: `  截止：${t.dueDate ? formatDate(t.dueDate) : '未设置'}`, color: '666666', size: 20 }),
-            ],
-            spacing: { after: 80 }
+        const priorityMap: any = { low: '低', medium: '中', high: '高' }
+        const statusMap: any = { todo: '待处理', in_progress: '进行中', done: '已完成', blocked: '已阻塞' }
+        const headerRow = new TableRow({
+          children: ['序号', '待办事项', '负责人', '截止日期', '优先级', '状态'].map(t => new TableCell({
+            children: [p([run(t, { bold: true, color: '1E293B', size: 20 })], { alignment: AlignmentType.CENTER })],
+            shading: headerShading,
+            borders: { top: border, bottom: border, left: border, right: border },
+            verticalAlign: 'center'
           }))
         })
+        const dataRows = data.tasks.map((t, i) => new TableRow({
+          children: [
+            new TableCell({ children: [p(String(i + 1), { alignment: AlignmentType.CENTER })], borders: { top: border, bottom: border, left: border, right: border } }),
+            new TableCell({ children: [p(t.title)], width: { size: 40, type: WidthType.PERCENTAGE }, borders: { top: border, bottom: border, left: border, right: border } }),
+            new TableCell({ children: [p(t.assignee || '未分配')], borders: { top: border, bottom: border, left: border, right: border } }),
+            new TableCell({ children: [p(t.dueDate ? formatDate(t.dueDate) : '未设置')], borders: { top: border, bottom: border, left: border, right: border } }),
+            new TableCell({ children: [p(priorityMap[t.priority] || t.priority)], borders: { top: border, bottom: border, left: border, right: border } }),
+            new TableCell({ children: [p(statusMap[t.status] || t.status)], borders: { top: border, bottom: border, left: border, right: border } })
+          ]
+        }))
+        children.push(new Table({ rows: [headerRow, ...dataRows], width: { size: 100, type: WidthType.PERCENTAGE } }))
       } else {
-        children.push(new Paragraph({ text: '暂无待办' }))
+        children.push(p('（暂无待办）', { italics: true } as any))
       }
 
-      children.push(new Paragraph({ text: '四、风险点', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      children.push(h('四、风险点', HeadingLevel.HEADING_1))
       if (data.minutes?.risks) {
         const risks: any[] = JSON.parse(data.minutes.risks)
+        const levelMap: any = { low: '低风险', medium: '中风险', high: '高风险' }
+        const levelColor: any = { low: '16A34A', medium: 'D97706', high: 'DC2626' }
         risks.forEach((r, i) => {
-          children.push(new Paragraph({
-            children: [
-              new TextRun(`${i + 1}. [${{ low: '低', medium: '中', high: '高' }[r.level] || '中'}风险] `),
-              new TextRun(r.content)
-            ],
-            spacing: { after: 80 }
-          }))
+          children.push(p([
+            run(`${i + 1}. `),
+            run(`[${levelMap[r.level] || '中风险'}] `, { bold: true, color: levelColor[r.level] || 'D97706' }),
+            run(r.content)
+          ]))
         })
       } else {
-        children.push(new Paragraph({ text: '暂无风险点' }))
+        children.push(p('（暂无风险点）', { italics: true } as any))
       }
 
-      children.push(new Paragraph({ text: '五、会议结论', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      children.push(h('五、会议结论', HeadingLevel.HEADING_1))
       if (data.minutes?.conclusions) {
         const cs: any[] = JSON.parse(data.minutes.conclusions)
-        cs.forEach((c, i) => {
-          children.push(new Paragraph({
-            children: [new TextRun(`${i + 1}. ${c.content}`)],
-            spacing: { after: 80 }
-          }))
-        })
+        cs.forEach((c, i) => children.push(p(`${i + 1}. ${c.content}`)))
       } else {
-        children.push(new Paragraph({ text: '暂无结论' }))
+        children.push(p('（暂无结论）', { italics: true } as any))
       }
 
-      children.push(new Paragraph({ text: '六、附件清单', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      if (data.minutes?.disputes) {
+        const ds: any[] = JSON.parse(data.minutes.disputes)
+        if (ds.length > 0) {
+          children.push(h('六、争议点', HeadingLevel.HEADING_1))
+          ds.forEach((d, i) => children.push(p(`${i + 1}. ${d.content}`)))
+        }
+      }
+
+      children.push(h('七、附件清单', HeadingLevel.HEADING_1))
       if (data.attachments.length > 0) {
-        data.attachments.forEach((a, i) => {
-          children.push(new Paragraph({
-            children: [
-              new TextRun(`${i + 1}. ${a.fileName}`),
-              new TextRun({ text: `  ${formatFileSize(a.fileSize)}`, color: '999999', size: 20 })
-            ],
-            spacing: { after: 60 }
+        const headerRow = new TableRow({
+          children: ['序号', '文件名', '类型', '大小'].map(t => new TableCell({
+            children: [p([run(t, { bold: true, color: '1E293B', size: 20 })], { alignment: AlignmentType.CENTER })],
+            shading: headerShading,
+            borders: { top: border, bottom: border, left: border, right: border }
           }))
         })
+        const catMap: any = { document: '文档', audio: '音频', image: '图片', other: '其他' }
+        const dataRows = data.attachments.map((a, i) => new TableRow({
+          children: [
+            new TableCell({ children: [p(String(i + 1), { alignment: AlignmentType.CENTER })], borders: { top: border, bottom: border, left: border, right: border } }),
+            new TableCell({ children: [p(a.fileName)], borders: { top: border, bottom: border, left: border, right: border } }),
+            new TableCell({ children: [p(catMap[a.category] || a.category || '其他')], borders: { top: border, bottom: border, left: border, right: border } }),
+            new TableCell({ children: [p(formatFileSize(a.fileSize))], borders: { top: border, bottom: border, left: border, right: border } })
+          ]
+        }))
+        children.push(new Table({ rows: [headerRow, ...dataRows], width: { size: 100, type: WidthType.PERCENTAGE } }))
       } else {
-        children.push(new Paragraph({ text: '暂无附件' }))
+        children.push(p('（暂无附件）', { italics: true } as any))
+      }
+
+      children.push(h('八、聊天记录', HeadingLevel.HEADING_1))
+      if (data.chats.length > 0) {
+        data.chats.forEach((c: any) => {
+          children.push(p([
+            run(`[${formatDateTime(c.createdAt)}] `, { color: '64748B', size: 18 }),
+            run(`${c.sender}：`, { bold: true, color: '2563EB' }),
+            run(c.content)
+          ]))
+        })
+      } else {
+        children.push(p('（暂无聊天记录）', { italics: true } as any))
+      }
+
+      children.push(h('九、会议截图', HeadingLevel.HEADING_1))
+      if (data.screenshots.length > 0) {
+        data.screenshots.forEach((s: any, i: number) => {
+          children.push(p([
+            run(`${i + 1}. ${s.fileName}`),
+            s.description ? run(` — ${s.description}`, { color: '64748B', size: 18 }) : run('')
+          ]))
+        })
+      } else {
+        children.push(p('（暂无截图）', { italics: true } as any))
       }
 
       if (data.transcripts.length > 0) {
-        children.push(new Paragraph({ text: '七、会议转写', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
-        data.transcripts.forEach(t => {
-          children.push(new Paragraph({
-            children: [
-              new TextRun({ text: `${t.speaker || '未知'}：`, bold: true, color: '2563eb' }),
-              new TextRun(t.content)
-            ],
-            spacing: { after: 80 }
-          }))
+        children.push(h('十、会议转写原文', HeadingLevel.HEADING_1))
+        data.transcripts.forEach((t: any) => {
+          children.push(p([
+            run(`${t.speaker || '未知'}：`, { bold: true, color: '2563EB' }),
+            run(t.content)
+          ], { spacing: { after: 60 } }))
         })
       }
 
-      const doc = new Document({ sections: [{ properties: {}, children }] })
+      const doc = new Document({
+        sections: [{ properties: {}, children }],
+        numbering: {
+          config: [{
+            reference: 'default-bullet-numbering',
+            levels: [{ level: 0, format: LevelFormat.DECIMAL, text: '%1.', alignment: AlignmentType.START }]
+          }]
+        }
+      })
       const buffer = await Packer.toBuffer(doc)
 
       const safeName = m.title.replace(/[\\/:*?"<>|]/g, '_')
       const saveRes = await window.api.dialog.saveFile({
-        defaultPath: `${safeName} - 会议纪要.docx`,
+        defaultPath: `${safeName} - 完整会议资料.docx`,
         filters: [{ name: 'Word 文档', extensions: ['docx'] }]
       })
       if (saveRes.canceled || !saveRes.filePath) { showToast('已取消导出'); return }
@@ -325,100 +369,113 @@ export default function Resources() {
     showToast(`正在生成《${m.title}》PDF 文档...`)
     try {
       const data = await buildMeetingReport(m)
-      const { default: jsPDF } = await import('jspdf')
 
-      const doc = new jsPDF()
-      const pageWidth = doc.internal.pageSize.getWidth()
-      const margin = 20
-      let y = margin
+      const summaries: string[] = data.minutes?.summary ? JSON.parse(data.minutes.summary) : []
+      const risks: any[] = data.minutes?.risks ? JSON.parse(data.minutes.risks) : []
+      const conclusions: any[] = data.minutes?.conclusions ? JSON.parse(data.minutes.conclusions) : []
+      const disputes: any[] = data.minutes?.disputes ? JSON.parse(data.minutes.disputes) : []
 
-      const addText = (text: string, opts?: { size?: number; bold?: boolean; color?: string; indent?: number; spacing?: number }) => {
-        const { size = 12, bold = false, color = '#000000', indent = 0, spacing = 2 } = opts || {}
-        doc.setFontSize(size)
-        doc.setFont('helvetica', bold ? 'bold' : 'normal')
-        doc.setTextColor(color)
-        const x = margin + indent
-        const maxWidth = pageWidth - margin * 2 - indent
-        const lines = doc.splitTextToSize(text, maxWidth)
-        lines.forEach((line: string) => {
-          if (y > 270) { doc.addPage(); y = margin }
-          doc.text(line, x, y)
-          y += size / 2.5 + spacing
-        })
-      }
+      const levelMap: any = { low: { text: '低风险', color: '#16A34A' }, medium: { text: '中风险', color: '#D97706' }, high: { text: '高风险', color: '#DC2626' } }
+      const priorityMap: any = { low: '低', medium: '中', high: '高' }
+      const statusMap: any = { todo: '待处理', in_progress: '进行中', done: '已完成', blocked: '已阻塞' }
+      const catMap: any = { document: '文档', audio: '音频', image: '图片', other: '其他' }
+      const agendaStatusMap: any = { pending: '待讨论', in_progress: '进行中', completed: '已完成' }
 
-      addText(m.title, { size: 20, bold: true, spacing: 10 })
-      y += 4
+      const html = `<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif; color: #1E293B; line-height: 1.7; padding: 0; margin: 0; font-size: 14px; }
+  h1 { font-size: 22px; color: #0F172A; border-bottom: 2px solid #2563EB; padding-bottom: 6px; margin: 28px 0 14px; }
+  h2 { font-size: 16px; color: #1E40AF; margin: 20px 0 10px; }
+  .title { font-size: 28px; text-align: center; font-weight: 700; color: #0F172A; margin: 10px 0 24px; }
+  .meta { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 12px 16px; margin-bottom: 20px; }
+  .meta p { margin: 4px 0; color: #475569; }
+  .meta b { color: #1E293B; margin-right: 4px; }
+  ul, ol { margin: 8px 0 8px 22px; padding: 0; }
+  li { margin: 4px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 13px; }
+  th, td { border: 1px solid #E2E8F0; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #F1F5F9; color: #0F172A; font-weight: 600; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; }
+  .chat { margin: 6px 0; }
+  .chat-meta { color: #64748B; font-size: 12px; }
+  .chat-sender { color: #2563EB; font-weight: 600; }
+  .empty { color: #94A3B8; font-style: italic; }
+  .risk-tag { font-weight: 600; }
+</style></head><body>
+  <div class="title">${m.title}</div>
+  <div class="meta">
+    <p><b>会议时间：</b>${formatDateTime(m.startTime)}${m.endTime ? ' ~ ' + formatDateTime(m.endTime) : ''}</p>
+    <p><b>会议地点：</b>${m.location || '-'}</p>
+    <p><b>参会人员：</b>${data.participants.map(p => `${p.name}${p.isHost ? '（主持人）' : ''}${p.role ? '【' + p.role + '】' : ''}`).join('、') || '-'}</p>
+  </div>
 
-      addText(`会议时间：${formatDateTime(m.startTime)}${m.endTime ? ' ~ ' + formatDateTime(m.endTime) : ''}`, { size: 11, color: '#555555' })
-      addText(`会议地点：${m.location || '-'}`, { size: 11, color: '#555555' })
-      addText(`参会人员：${data.participants.map(p => p.name).join('、') || '-'}`, { size: 11, color: '#555555' })
-      y += 6
+  <h1>一、会议摘要</h1>
+  ${summaries.length ? `<ol>${summaries.map(s => `<li>${s}</li>`).join('')}</ol>` : '<p class="empty">（暂无摘要）</p>'}
 
-      addText('一、会议摘要', { size: 14, bold: true, spacing: 3 })
-      if (data.minutes?.summary) {
-        const summaries: string[] = JSON.parse(data.minutes.summary)
-        summaries.forEach((s, i) => addText(`${i + 1}. ${s}`, { size: 11, indent: 4 }))
-      } else {
-        addText('暂无摘要', { size: 11, indent: 4, color: '#999999' })
-      }
-      y += 4
+  <h1>二、会议议题</h1>
+  ${data.agendas.length ? `<ol>${data.agendas.map(a => `<li>${a.title}${a.status ? ` <span class="badge" style="background:#FEF3C7;color:#92400E">${agendaStatusMap[a.status] || a.status}</span>` : ''}</li>`).join('')}</ol>` : '<p class="empty">（暂无议题）</p>'}
 
-      addText('二、会议议题', { size: 14, bold: true, spacing: 3 })
-      if (data.agendas.length > 0) {
-        data.agendas.forEach((a, i) => addText(`${i + 1}. ${a.title}`, { size: 11, indent: 4 }))
-      } else {
-        addText('暂无议题', { size: 11, indent: 4, color: '#999999' })
-      }
-      y += 4
+  <h1>三、待办事项</h1>
+  ${data.tasks.length ? `
+  <table>
+    <tr><th style="width:40px">序号</th><th>待办事项</th><th style="width:80px">负责人</th><th style="width:90px">截止日期</th><th style="width:60px">优先级</th><th style="width:70px">状态</th></tr>
+    ${data.tasks.map((t, i) => `<tr>
+      <td>${i + 1}</td>
+      <td>${t.title}</td>
+      <td>${t.assignee || '<span class="empty">未分配</span>'}</td>
+      <td>${t.dueDate ? formatDate(t.dueDate) : '<span class="empty">未设置</span>'}</td>
+      <td>${priorityMap[t.priority] || t.priority}</td>
+      <td>${statusMap[t.status] || t.status}</td>
+    </tr>`).join('')}
+  </table>` : '<p class="empty">（暂无待办）</p>'}
 
-      addText('三、待办事项', { size: 14, bold: true, spacing: 3 })
-      if (data.tasks.length > 0) {
-        data.tasks.forEach((t, i) => {
-          addText(`${i + 1}. ${t.title}`, { size: 11, indent: 4 })
-          addText(`    负责人：${t.assignee || '未分配'}  截止：${t.dueDate ? formatDate(t.dueDate) : '未设置'}`, { size: 9, color: '#666666', indent: 8 })
-        })
-      } else {
-        addText('暂无待办', { size: 11, indent: 4, color: '#999999' })
-      }
-      y += 4
+  <h1>四、风险点</h1>
+  ${risks.length ? `<ol>${risks.map(r => `<li><span class="risk-tag" style="color:${(levelMap[r.level] || levelMap.medium).color}">[${(levelMap[r.level] || levelMap.medium).text}]</span> ${r.content}</li>`).join('')}</ol>` : '<p class="empty">（暂无风险点）</p>'}
 
-      addText('四、风险点', { size: 14, bold: true, spacing: 3 })
-      if (data.minutes?.risks) {
-        const risks: any[] = JSON.parse(data.minutes.risks)
-        risks.forEach((r, i) => {
-          addText(`${i + 1}. [${{ low: '低', medium: '中', high: '高' }[r.level] || '中'}风险] ${r.content}`, { size: 11, indent: 4 })
-        })
-      } else {
-        addText('暂无风险点', { size: 11, indent: 4, color: '#999999' })
-      }
-      y += 4
+  <h1>五、会议结论</h1>
+  ${conclusions.length ? `<ol>${conclusions.map(c => `<li>${c.content}</li>`).join('')}</ol>` : '<p class="empty">（暂无结论）</p>'}
 
-      addText('五、会议结论', { size: 14, bold: true, spacing: 3 })
-      if (data.minutes?.conclusions) {
-        const cs: any[] = JSON.parse(data.minutes.conclusions)
-        cs.forEach((c, i) => addText(`${i + 1}. ${c.content}`, { size: 11, indent: 4 }))
-      } else {
-        addText('暂无结论', { size: 11, indent: 4, color: '#999999' })
-      }
-      y += 4
+  ${disputes.length ? `<h1>六、争议点</h1><ol>${disputes.map(d => `<li>${d.content}</li>`).join('')}</ol>` : ''}
 
-      addText('六、附件清单', { size: 14, bold: true, spacing: 3 })
-      if (data.attachments.length > 0) {
-        data.attachments.forEach((a, i) => addText(`${i + 1}. ${a.fileName} (${formatFileSize(a.fileSize)})`, { size: 11, indent: 4 }))
-      } else {
-        addText('暂无附件', { size: 11, indent: 4, color: '#999999' })
-      }
+  <h1>${disputes.length ? '七' : '六'}、附件清单</h1>
+  ${data.attachments.length ? `
+  <table>
+    <tr><th style="width:40px">序号</th><th>文件名</th><th style="width:70px">类型</th><th style="width:80px">大小</th></tr>
+    ${data.attachments.map((a, i) => `<tr>
+      <td>${i + 1}</td>
+      <td>${a.fileName}</td>
+      <td>${catMap[a.category] || a.category || '其他'}</td>
+      <td>${formatFileSize(a.fileSize)}</td>
+    </tr>`).join('')}
+  </table>` : '<p class="empty">（暂无附件）</p>'}
+
+  <h1>${disputes.length ? '八' : '七'}、聊天记录</h1>
+  ${data.chats.length ? data.chats.map((c: any) => `
+  <div class="chat">
+    <span class="chat-meta">[${formatDateTime(c.createdAt)}]</span>
+    <span class="chat-sender"> ${c.sender}：</span>
+    <span>${c.content}</span>
+  </div>`).join('') : '<p class="empty">（暂无聊天记录）</p>'}
+
+  <h1>${disputes.length ? '九' : '八'}、会议截图</h1>
+  ${data.screenshots.length ? `<ol>${data.screenshots.map((s: any) => `<li>${s.fileName}${s.description ? ` — <span style="color:#64748B">${s.description}</span>` : ''}</li>`).join('')}</ol>` : '<p class="empty">（暂无截图）</p>'}
+
+  ${data.transcripts.length ? `
+  <h1>${disputes.length ? '十' : '九'}、会议转写原文</h1>
+  ${data.transcripts.map((t: any) => `<div class="chat"><span class="chat-sender">${t.speaker || '未知'}：</span><span>${t.content}</span></div>`).join('')}` : ''}
+</body></html>`
+
+      const pdfBuffer = await window.api.pdf.generateFromHtml(html)
 
       const safeName = m.title.replace(/[\\/:*?"<>|]/g, '_')
       const saveRes = await window.api.dialog.saveFile({
-        defaultPath: `${safeName} - 会议纪要.pdf`,
+        defaultPath: `${safeName} - 完整会议资料.pdf`,
         filters: [{ name: 'PDF 文档', extensions: ['pdf'] }]
       })
       if (saveRes.canceled || !saveRes.filePath) { showToast('已取消导出'); return }
 
-      const buffer = doc.output('arraybuffer')
-      await window.api.file.write(saveRes.filePath, new Uint8Array(buffer))
+      await window.api.file.write(saveRes.filePath, new Uint8Array(pdfBuffer as any))
       showToast('PDF 文档生成成功！')
 
       if (confirm('导出成功！是否立即打开文件？')) {

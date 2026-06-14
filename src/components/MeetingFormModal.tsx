@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { X } from 'lucide-react'
 import { useAppStore } from '@/store'
-import type { MeetingType, MeetingStatus } from '@/types'
+import type { MeetingType, MeetingStatus, Participant } from '@/types'
 
 interface Props {
   onClose: () => void
@@ -10,6 +10,7 @@ interface Props {
 export default function MeetingFormModal({ onClose }: Props) {
   const addMeeting = useAppStore(s => s.addMeeting)
   const setCurrentMeetingId = useAppStore(s => s.setCurrentMeetingId)
+  const addParticipant = useAppStore(s => s.addParticipant)
 
   const now = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -61,12 +62,13 @@ export default function MeetingFormModal({ onClose }: Props) {
     if (form.participants.trim()) {
       const names = form.participants.split(/[,，;；\n]/).map(s => s.trim()).filter(Boolean)
       for (let i = 0; i < names.length; i++) {
-        await window.api.participants.create({
+        const p = await window.api.participants.create({
           meetingId: meeting.id,
           name: names[i],
           role: i === 0 ? '主持人' : '参会人',
           isHost: i === 0 ? 1 : 0
         })
+        addParticipant(p as Participant)
       }
     }
 
