@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn, formatDate, formatDateTime, statusText, statusColor, avatarColor } from '@/utils'
-import type { Task, TaskStatus, TaskPriority, Meeting } from '@/types'
+import type { Task, TaskStatus, TaskPriority, Meeting, Participant } from '@/types'
 
 const COLUMNS: { key: TaskStatus; label: string; color: string; dotColor: string; icon: any }[] = [
   { key: 'todo', label: '待办', color: 'border-slate-300 bg-slate-50/50', dotColor: 'bg-slate-400', icon: Clock },
@@ -355,6 +355,7 @@ export default function Tasks() {
           onClose={() => { setShowModal(false); setEditing(null) }}
           onSubmit={createOrUpdate}
           meetings={meetings}
+          allParticipants={participants}
           assignees={allAssignees}
         />
       )}
@@ -486,12 +487,13 @@ function TaskCard({
 }
 
 function TaskModal({
-  task, onClose, onSubmit, meetings, assignees
+  task, onClose, onSubmit, meetings, allParticipants, assignees
 }: {
   task: Task | null
   onClose: () => void
   onSubmit: (data: any) => void
   meetings: Meeting[]
+  allParticipants: Participant[]
   assignees: string[]
 }) {
   const isEdit = !!task?.id
@@ -506,6 +508,17 @@ function TaskModal({
     dueDate: task?.dueDate ? task.dueDate.slice(0, 10) : '',
     meetingId: task?.meetingId || undefined as number | undefined
   })
+
+  const meetingAssignees = useMemo(() => {
+    if (form.meetingId) {
+      const names = allParticipants.filter(p => p.meetingId === form.meetingId).map(p => p.name)
+      const set = new Set(names)
+      if (task?.assignee) set.add(task.assignee)
+      if (form.assignee) set.add(form.assignee)
+      return Array.from(set)
+    }
+    return assignees
+  }, [form.meetingId, allParticipants, assignees, task?.assignee, form.assignee])
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -546,7 +559,7 @@ function TaskModal({
                 className="select"
               >
                 <option value="">未分配</option>
-                {assignees.map(a => <option key={a} value={a}>{a}</option>)}
+                {meetingAssignees.map(a => <option key={a} value={a}>{a}</option>)}
               </select>
             </div>
             <div>

@@ -209,6 +209,17 @@ declare global {
         save: (meetingId: number, agendaId: number, data: any) => Promise<any>
         deleteByAgenda: (meetingId: number, agendaId: number) => Promise<{ success: boolean }>
       }
+      exportRecords: {
+        list: (limit?: number) => Promise<any[]>
+        create: (data: any) => Promise<any>
+        delete: (id: number) => Promise<{ success: boolean }>
+      }
+      participantTemplates: {
+        list: () => Promise<any[]>
+        create: (data: any) => Promise<any>
+        update: (id: number, data: any) => Promise<any>
+        delete: (id: number) => Promise<{ success: boolean }>
+      }
     }
   }
 }

@@ -158,6 +158,35 @@ function createTables() {
       FOREIGN KEY (agendaId) REFERENCES agendas(id) ON DELETE CASCADE,
       UNIQUE(meetingId, agendaId)
     );
+
+    CREATE TABLE IF NOT EXISTS export_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      meetingId INTEGER NOT NULL,
+      meetingTitle TEXT NOT NULL,
+      format TEXT NOT NULL,
+      filePath TEXT NOT NULL,
+      fileSize INTEGER,
+      createdAt TEXT DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (meetingId) REFERENCES meetings(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS participant_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      createdAt TEXT DEFAULT (datetime('now','localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS participant_template_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      templateId INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      role TEXT,
+      email TEXT,
+      isHost INTEGER DEFAULT 0,
+      sortOrder INTEGER DEFAULT 0,
+      FOREIGN KEY (templateId) REFERENCES participant_templates(id) ON DELETE CASCADE
+    );
   `)
 }
 
@@ -609,6 +638,54 @@ export const databaseHandlers = {
   },
   'agendaMinutes:deleteByAgenda': (meetingId: number, agendaId: number) => {
     db.prepare('DELETE FROM agenda_minutes WHERE meetingId = ? AND agendaId = ?').run(meetingId, agendaId)
+    return { success: true }
+  },
+
+  'exportRecords:list': (limit = 50) => {
+    return db.prepare('SELECT * FROM export_records ORDER BY createdAt DESC LIMIT ?').all(limit)
+  },
+  'exportRecords:create': (data: { meetingId: number; meetingTitle: string; format: string; filePath: string; fileSize?: number }) => {
+    const info = db.prepare('INSERT INTO export_records (meetingId, meetingTitle, format, filePath, fileSize) VALUES (?, ?, ?, ?, ?)')
+      .run(data.meetingId, data.meetingTitle, data.format, data.filePath, data.fileSize ?? null)
+    return db.prepare('SELECT * FROM export_records WHERE id = ?').get(info.lastInsertRowid)
+  },
+  'exportRecords:delete': (id: number) => {
+    db.prepare('DELETE FROM export_records WHERE id = ?').run(id)
+    return { success: true }
+  },
+
+  'participantTemplates:list': () => {
+    const templates = db.prepare('SELECT * FROM participant_templates ORDER BY createdAt DESC').all() as any[]
+    templates.forEach(t => {
+      t.items = db.prepare('SELECT * FROM participant_template_items WHERE templateId = ? ORDER BY sortOrder, id').all(t.id)
+    })
+    return templates
+  },
+  'participantTemplates:create': (data: { name: string; description?: string; items: { name: string; role?: string; email?: string; isHost?: number }[] }) => {
+    const tplInfo = db.prepare('INSERT INTO participant_templates (name, description) VALUES (?, ?)').run(data.name, data.description ?? null)
+    const templateId = tplInfo.lastInsertRowid as number
+    data.items.forEach((item, i) => {
+      db.prepare('INSERT INTO participant_template_items (templateId, name, role, email, isHost, sortOrder) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(templateId, item.name, item.role ?? null, item.email ?? null, item.isHost ?? 0, i)
+    })
+    return db.prepare('SELECT * FROM participant_templates WHERE id = ?').get(templateId)
+  },
+  'participantTemplates:update': (id: number, data: { name?: string; description?: string; items?: { name: string; role?: string; email?: string; isHost?: number }[] }) => {
+    if (data.name !== undefined || data.description !== undefined) {
+      db.prepare('UPDATE participant_templates SET name = COALESCE(?, name), description = COALESCE(?, description) WHERE id = ?')
+        .run(data.name ?? null, data.description ?? null, id)
+    }
+    if (data.items) {
+      db.prepare('DELETE FROM participant_template_items WHERE templateId = ?').run(id)
+      data.items.forEach((item, i) => {
+        db.prepare('INSERT INTO participant_template_items (templateId, name, role, email, isHost, sortOrder) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(id, item.name, item.role ?? null, item.email ?? null, item.isHost ?? 0, i)
+      })
+    }
+    return db.prepare('SELECT * FROM participant_templates WHERE id = ?').get(id)
+  },
+  'participantTemplates:delete': (id: number) => {
+    db.prepare('DELETE FROM participant_templates WHERE id = ?').run(id)
     return { success: true }
   }
 }

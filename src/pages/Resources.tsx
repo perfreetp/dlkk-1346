@@ -4,13 +4,14 @@ import {
   MessageSquare, Camera, Download, Filter, Trash2, Eye,
   FileWord, FileSpreadsheet, Mail, Lock, Unlock, Clock,
   Calendar, User, Tag, ChevronRight, Sparkles, X, AlertCircle,
-  Copy, CheckCircle2, MoreHorizontal, LayoutGrid, List as ListIcon
+  Copy, CheckCircle2, MoreHorizontal, LayoutGrid, List as ListIcon,
+  Package, FolderDown, ExternalLink
 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn, formatDate, formatDateTime, formatFileSize, statusText } from '@/utils'
 import type { Attachment, ChatMessage, Screenshot, SearchResult, Meeting } from '@/types'
 
-type ResourceTab = 'attachments' | 'chat' | 'screenshots' | 'search'
+type ResourceTab = 'attachments' | 'chat' | 'screenshots' | 'search' | 'history'
 type AttachmentCategory = 'all' | 'document' | 'audio' | 'image' | 'other'
 
 const CAT_MAP: Record<string, { label: string; icon: any; color: string }> = {
@@ -46,6 +47,7 @@ export default function Resources() {
   const [showLockModal, setShowLockModal] = useState(false)
   const [lockFormPwd, setLockFormPwd] = useState('')
   const [toast, setToast] = useState('')
+  const [exportRecords, setExportRecords] = useState<any[]>([])
 
   const showToast = (msg: string) => {
     setToast(msg)
@@ -82,7 +84,25 @@ export default function Resources() {
     setShots(s as Screenshot[])
   }
 
-  useEffect(() => { loadData() }, [meetingFilter, meetings.length])
+  const loadExportRecords = async () => {
+    try {
+      const list = await window.api.exportRecords.list(50)
+      setExportRecords(list as any[])
+    } catch (e) {
+      console.warn('Load export records failed:', e)
+    }
+  }
+
+  const addExportRecord = async (m: Meeting, format: string, filePath: string, fileSize?: number) => {
+    try {
+      await window.api.exportRecords.create({
+        meetingId: m.id, meetingTitle: m.title, format, filePath, fileSize
+      })
+      await loadExportRecords()
+    } catch (e) { /* ignore */ }
+  }
+
+  useEffect(() => { loadData(); loadExportRecords() }, [meetingFilter, meetings.length])
 
   const doSearch = async () => {
     if (!keyword.trim()) { setSearchResult(null); return }
@@ -352,6 +372,7 @@ export default function Resources() {
       if (saveRes.canceled || !saveRes.filePath) { showToast('已取消导出'); return }
 
       await window.api.file.write(saveRes.filePath, new Uint8Array(buffer))
+      await addExportRecord(m, 'Word', saveRes.filePath, buffer.byteLength)
       showToast('Word 文档生成成功！')
 
       if (confirm('导出成功！是否立即打开文件？')) {
@@ -476,6 +497,7 @@ export default function Resources() {
       if (saveRes.canceled || !saveRes.filePath) { showToast('已取消导出'); return }
 
       await window.api.file.write(saveRes.filePath, new Uint8Array(pdfBuffer as any))
+      await addExportRecord(m, 'PDF', saveRes.filePath, (pdfBuffer as any)?.length || 0)
       showToast('PDF 文档生成成功！')
 
       if (confirm('导出成功！是否立即打开文件？')) {
@@ -484,6 +506,163 @@ export default function Resources() {
     } catch (e: any) {
       console.error(e)
       showToast('导出失败：' + (e.message || e))
+    }
+  }
+
+  const exportZip = async () => {
+    const m = meetingFilter === 'all' ? meetings[0] : meetings.find(x => x.id === meetingFilter)
+    if (!m) { alert('请选择会议'); return }
+    showToast(`正在打包《${m.title}》完整资料...`)
+    try {
+      const JSZip = (await import('jszip')).default
+      const zip = new JSZip()
+      const safeName = m.title.replace(/[\\/:*?"<>|]/g, '_')
+      const folder = zip.folder(`${safeName} - 完整会议资料`)!
+
+      const data = await buildMeetingReport(m)
+
+      showToast('正在生成 Word 和 PDF...')
+
+      // Word
+      const {
+        Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
+        Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType, LevelFormat
+      } = await import('docx')
+      const h = (txt: string, level: any) => new Paragraph({ text: txt, heading: level, spacing: { before: 300, after: 180 } })
+      const p = (runs: any[], opts?: any) => new Paragraph({
+        children: Array.isArray(runs) ? runs : [new TextRun(runs as any)], spacing: { after: 80 }, ...opts
+      })
+      const run = (txt: string, opts?: any) => new TextRun({ text: txt, ...opts })
+      const border = { style: BorderStyle.SINGLE, size: 1, color: 'D0D5DD' }
+      const headerShading = { type: ShadingType.CLEAR, fill: 'F1F5F9', color: 'auto' }
+
+      const wChildren: any[] = []
+      wChildren.push(new Paragraph({ text: m.title, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER, spacing: { after: 500 } }))
+      wChildren.push(p([run('会议时间：', { bold: true }), run(`${formatDateTime(m.startTime)}${m.endTime ? ' ~ ' + formatDateTime(m.endTime) : ''}`)]))
+      wChildren.push(p([run('会议地点：', { bold: true }), run(m.location || '-')]))
+      wChildren.push(p([run('参会人员：', { bold: true }), run(data.participants.map(p => `${p.name}${p.isHost ? '（主持人）' : ''}${p.role ? `【${p.role}】` : ''}`).join('、') || '-')], { spacing: { after: 400 } }))
+      wChildren.push(h('一、会议摘要', HeadingLevel.HEADING_1))
+      if (data.minutes?.summary) {
+        JSON.parse(data.minutes.summary).forEach((s: string, i: number) => wChildren.push(p(`${i + 1}. ${s}`)))
+      } else wChildren.push(p('（暂无摘要）', { italics: true } as any))
+      wChildren.push(h('二、会议议题', HeadingLevel.HEADING_1))
+      if (data.agendas.length) data.agendas.forEach((a: any, i: number) => wChildren.push(p(`${i + 1}. ${a.title}`)))
+      else wChildren.push(p('（暂无议题）', { italics: true } as any))
+      const doc = new Document({ sections: [{ properties: {}, children: wChildren }] })
+      const wordBuffer = await Packer.toBuffer(doc)
+      folder.file(`${safeName} - 会议纪要.docx`, new Uint8Array(wordBuffer))
+
+      // PDF
+      const pdfHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><style>
+        body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",Arial,sans-serif;color:#1E293B;line-height:1.7;font-size:14px}
+        h1{font-size:22px;border-bottom:2px solid #2563EB;padding-bottom:6px;margin:28px 0 14px;color:#0F172A}
+        .title{font-size:28px;text-align:center;font-weight:700;margin:10px 0 24px}
+        .meta{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:12px 16px}
+        .meta p{margin:4px 0;color:#475569}.meta b{color:#1E293B}
+      </style></head><body>
+        <div class="title">${m.title}</div>
+        <div class="meta">
+          <p><b>会议时间：</b>${formatDateTime(m.startTime)}${m.endTime ? ' ~ ' + formatDateTime(m.endTime) : ''}</p>
+          <p><b>会议地点：</b>${m.location || '-'}</p>
+          <p><b>参会人员：</b>${data.participants.map(p => `${p.name}${p.isHost ? '（主持人）' : ''}`).join('、') || '-'}</p>
+        </div>
+        <h1>会议摘要</h1>
+        ${data.minutes?.summary ? `<ol>${JSON.parse(data.minutes.summary).map((s: string) => `<li>${s}</li>`).join('')}</ol>` : '<p>（暂无）</p>'}
+      </body></html>`
+      const pdfBuffer = await window.api.pdf.generateFromHtml(pdfHtml)
+      folder.file(`${safeName} - 会议纪要.pdf`, new Uint8Array(pdfBuffer as any))
+
+      // 聊天记录文本
+      if (data.chats.length) {
+        const chatText = data.chats.map((c: any) =>
+          `[${formatDateTime(c.createdAt)}] ${c.sender}：${c.content}`
+        ).join('\n')
+        folder.file('聊天记录.txt', `${m.title}\n导出时间：${formatDateTime(new Date().toISOString())}\n\n${chatText}`)
+      }
+
+      // 目录说明
+      const levelMap: any = { low: '低风险', medium: '中风险', high: '高风险' }
+      const catMap: any = { document: '文档', audio: '音频', image: '图片', other: '其他' }
+      const readme = `【${m.title}】完整会议资料包\n` +
+        `导出时间：${formatDateTime(new Date().toISOString())}\n\n` +
+        `目录说明：\n` +
+        `  1. ${safeName} - 会议纪要.docx   ——  完整 Word 版会议纪要\n` +
+        `  2. ${safeName} - 会议纪要.pdf    ——  完整 PDF 版会议纪要\n` +
+        `  3. 附件/                          ——  原始附件文件（${data.attachments.length} 个）\n` +
+        `  4. 截图/                          ——  会议截图原文件（${data.screenshots.length} 个）\n` +
+        (data.chats.length ? `  5. 聊天记录.txt                    ——  完整聊天记录文本\n` : '') +
+        `\n会议信息：\n` +
+        `  · 时间：${formatDateTime(m.startTime)}${m.endTime ? ' ~ ' + formatDateTime(m.endTime) : ''}\n` +
+        `  · 地点：${m.location || '-'}\n` +
+        `  · 参会人数：${data.participants.length} 人\n` +
+        `  · 议题目录：\n${data.agendas.map((a: any, i: number) => `      ${i + 1}. ${a.title}`).join('\n') || '      （无）'}\n` +
+        `  · 待办事项：${data.tasks.length} 项\n` +
+        `  · 风险点：${data.minutes?.risks ? JSON.parse(data.minutes.risks).length : 0} 个\n` +
+        `  · 附件：${data.attachments.length} 个\n` +
+        `  · 截图：${data.screenshots.length} 个\n` +
+        (data.minutes?.risks ? `\n风险提示：\n${JSON.parse(data.minutes.risks).map((r: any, i: number) => `  ${i + 1}. [${levelMap[r.level] || '中风险'}] ${r.content}`).join('\n')}` : '') +
+        `\n\n—— 由 AI 会议助理自动生成`
+      folder.file('00-目录说明.txt', readme)
+
+      // 附件
+      if (data.attachments.length) {
+        const attFolder = folder.folder('附件')!
+        for (const a of data.attachments) {
+          try {
+            if (a.filePath) {
+              const fs = await import('fs/promises')
+              try {
+                const buf = await fs.readFile(a.filePath)
+                attFolder.file(a.fileName, buf)
+              } catch { attFolder.file(`${a.fileName}.txt`, `（原始文件无法读取：${a.filePath}）`) }
+            } else {
+              attFolder.file(`${a.fileName}.txt`, `（文件路径缺失）`)
+            }
+          } catch {
+            attFolder.file(`${a.fileName}.txt`, `附件：${a.fileName}（${catMap[a.category] || '其他'}，${formatFileSize(a.fileSize)}）`)
+          }
+        }
+      }
+
+      // 截图
+      if (data.screenshots.length) {
+        const shotFolder = folder.folder('截图')!
+        for (const s of data.screenshots) {
+          try {
+            if (s.filePath) {
+              const fs = await import('fs/promises')
+              try {
+                const buf = await fs.readFile(s.filePath)
+                shotFolder.file(s.fileName, buf)
+              } catch { shotFolder.file(`${s.fileName}.txt`, `（原始截图无法读取：${s.filePath}）`) }
+            } else {
+              shotFolder.file(`${s.fileName}.txt`, `截图：${s.fileName}${s.description ? ` — ${s.description}` : ''}`)
+            }
+          } catch {
+            shotFolder.file(`${s.fileName}.txt`, `截图：${s.fileName}${s.description ? ` — ${s.description}` : ''}`)
+          }
+        }
+      }
+
+      showToast('正在生成压缩包...')
+      const zipBuffer = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } })
+
+      const saveRes = await window.api.dialog.saveFile({
+        defaultPath: `${safeName} - 完整会议资料.zip`,
+        filters: [{ name: '压缩包', extensions: ['zip'] }]
+      })
+      if (saveRes.canceled || !saveRes.filePath) { showToast('已取消导出'); return }
+
+      await window.api.file.write(saveRes.filePath, zipBuffer)
+      await addExportRecord(m, '压缩包', saveRes.filePath, zipBuffer.length)
+      showToast('完整资料包导出成功！')
+
+      if (confirm('导出成功！是否立即打开所在文件夹？')) {
+        await window.api.file.showInFolder(saveRes.filePath)
+      }
+    } catch (e: any) {
+      console.error(e)
+      showToast('打包失败：' + (e.message || e))
     }
   }
 
@@ -568,7 +747,8 @@ ${attList || '- （暂无附件）'}
     { key: 'attachments' as const, label: '附件', icon: FolderOpen, count: attachments.length },
     { key: 'chat' as const, label: '聊天记录', icon: MessageSquare, count: chats.length },
     { key: 'screenshots' as const, label: '会议截图', icon: Camera, count: shots.length },
-    { key: 'search' as const, label: '全文搜索', icon: Search, count: null }
+    { key: 'search' as const, label: '全文搜索', icon: Search, count: null },
+    { key: 'history' as const, label: '导出记录', icon: Clock, count: exportRecords.length }
   ]
 
   return (
@@ -617,6 +797,10 @@ ${attList || '- （暂无附件）'}
               <button onClick={() => { exportPDF(); setShowExportMenu(false) }} className="w-full text-left px-3 py-2 hover:bg-slate-50 inline-flex items-center gap-2">
                 <FileSpreadsheet size={14} className="text-red-600" /> 导出 PDF
               </button>
+              <button onClick={() => { exportZip(); setShowExportMenu(false) }} className="w-full text-left px-3 py-2 hover:bg-slate-50 inline-flex items-center gap-2">
+                <Package size={14} className="text-amber-600" /> 打包完整资料（ZIP）
+              </button>
+              <div className="border-t border-slate-100 my-1" />
               <button onClick={() => { generateEmail(); setShowExportMenu(false) }} className="w-full text-left px-3 py-2 hover:bg-slate-50 inline-flex items-center gap-2">
                 <Mail size={14} className="text-primary-600" /> 生成邮件正文
               </button>
@@ -887,6 +1071,93 @@ ${attList || '- （暂无附件）'}
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        ) : tab === 'history' ? (
+          <div className="h-full overflow-y-auto scrollbar-thin p-6">
+            {exportRecords.length === 0 ? (
+              <EmptyState
+                icon={Clock}
+                title="暂无导出记录"
+                desc="导出会议资料后，记录会显示在这里"
+              />
+            ) : (
+              <div className="max-w-4xl mx-auto">
+                <div className="text-xs text-slate-500 mb-4 flex items-center justify-between">
+                  <span>共 {exportRecords.length} 条导出记录</span>
+                  <button
+                    onClick={loadExportRecords}
+                    className="text-primary-600 hover:text-primary-700 inline-flex items-center gap-1"
+                  >
+                    <Clock size={12} /> 刷新
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {exportRecords.map(rec => {
+                    const fmtColor: Record<string, string> = {
+                      'Word': 'bg-blue-100 text-blue-700',
+                      'PDF': 'bg-red-100 text-red-700',
+                      '压缩包': 'bg-amber-100 text-amber-700'
+                    }
+                    return (
+                      <div
+                        key={rec.id}
+                        className="bg-white border border-slate-200 rounded-xl p-4 hover:border-primary-300 hover:shadow-sm transition flex items-center gap-4"
+                      >
+                        <div className={cn(
+                          'w-11 h-11 rounded-lg flex items-center justify-center shrink-0',
+                          rec.format === 'Word' ? 'bg-blue-50' : rec.format === 'PDF' ? 'bg-red-50' : 'bg-amber-50'
+                        )}>
+                          {rec.format === 'Word' ? <FileWord size={20} className="text-blue-600" /> :
+                            rec.format === 'PDF' ? <FileSpreadsheet size={20} className="text-red-600" /> :
+                              <Package size={20} className="text-amber-600" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className="font-medium text-slate-800 truncate">{rec.meetingTitle}</span>
+                            <span className={cn('tag', fmtColor[rec.format] || 'bg-slate-100 text-slate-600')}>{rec.format}</span>
+                          </div>
+                          <div className="text-xs text-slate-500 truncate flex items-center gap-2">
+                            <span>{rec.filePath}</span>
+                            {rec.fileSize ? <span>· {formatFileSize(rec.fileSize)}</span> : null}
+                            <span>· {formatDateTime(rec.createdAt)}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={async () => {
+                              try { await window.api.file.open(rec.filePath) }
+                              catch { alert('文件不存在或无法打开') }
+                            }}
+                            className="btn-ghost !p-2"
+                            title="打开文件"
+                          >
+                            <Eye size={15} />
+                          </button>
+                          <button
+                            onClick={() => window.api.file.showInFolder(rec.filePath)}
+                            className="btn-ghost !p-2"
+                            title="打开所在文件夹"
+                          >
+                            <FolderOpen size={15} />
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm('确定删除此导出记录？（不会删除实际文件）')) return
+                              await window.api.exportRecords.delete(rec.id)
+                              await loadExportRecords()
+                            }}
+                            className="btn-ghost !p-2 hover:!text-red-600 hover:!bg-red-50"
+                            title="删除记录"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
           </div>

@@ -123,6 +123,17 @@ const api = {
       ipcRenderer.invoke('agendaMinutes:save', meetingId, agendaId, data),
     deleteByAgenda: (meetingId: number, agendaId: number) =>
       ipcRenderer.invoke('agendaMinutes:deleteByAgenda', meetingId, agendaId)
+  },
+  exportRecords: {
+    list: (limit?: number) => ipcRenderer.invoke('exportRecords:list', limit),
+    create: (data: any) => ipcRenderer.invoke('exportRecords:create', data),
+    delete: (id: number) => ipcRenderer.invoke('exportRecords:delete', id)
+  },
+  participantTemplates: {
+    list: () => ipcRenderer.invoke('participantTemplates:list'),
+    create: (data: any) => ipcRenderer.invoke('participantTemplates:create', data),
+    update: (id: number, data: any) => ipcRenderer.invoke('participantTemplates:update', id, data),
+    delete: (id: number) => ipcRenderer.invoke('participantTemplates:delete', id)
   }
 }
 
