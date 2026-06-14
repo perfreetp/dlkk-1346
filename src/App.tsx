@@ -29,6 +29,7 @@ export default function App() {
         if (m.length > 0) {
           useAppStore.getState().setCurrentMeetingId(m[0].id)
         }
+        await useAppStore.getState().initLockState()
       } catch (e) {
         console.error('Load data error:', e)
       }

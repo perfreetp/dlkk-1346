@@ -101,6 +101,25 @@ const api = {
   },
   app: {
     getPath: (name: any) => ipcRenderer.invoke('app:getPath', name)
+  },
+  file: {
+    write: (filePath: string, data: string | Uint8Array, encoding?: string) =>
+      ipcRenderer.invoke('file:write', filePath, data, encoding),
+    open: (filePath: string) => ipcRenderer.invoke('file:open', filePath),
+    showInFolder: (filePath: string) => ipcRenderer.invoke('file:showInFolder', filePath)
+  },
+  settings: {
+    get: (key: string) => ipcRenderer.invoke('settings:get', key),
+    set: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
+    getAll: () => ipcRenderer.invoke('settings:getAll')
+  },
+  agendaMinutes: {
+    getByAgenda: (meetingId: number, agendaId: number) =>
+      ipcRenderer.invoke('agendaMinutes:getByAgenda', meetingId, agendaId),
+    save: (meetingId: number, agendaId: number, data: any) =>
+      ipcRenderer.invoke('agendaMinutes:save', meetingId, agendaId, data),
+    deleteByAgenda: (meetingId: number, agendaId: number) =>
+      ipcRenderer.invoke('agendaMinutes:deleteByAgenda', meetingId, agendaId)
   }
 }
 

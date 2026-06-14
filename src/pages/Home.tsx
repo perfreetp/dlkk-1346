@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Plus, Search, Calendar, Clock, Users, MapPin,
@@ -19,26 +19,25 @@ export default function Home() {
   const setCurrentMeetingId = useAppStore(s => s.setCurrentMeetingId)
   const removeMeeting = useAppStore(s => s.removeMeeting)
   const updateMeetingStore = useAppStore(s => s.updateMeeting)
+  const allParticipants = useAppStore(s => s.participants)
 
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<'all' | MeetingType>('all')
   const [statusFilter, setStatusFilter] = useState<'all' | MeetingStatus>('all')
   const [showModal, setShowModal] = useState(false)
-  const [participants, setParticipants] = useState<Record<number, Participant[]>>({})
   const [calendarOffset, setCalendarOffset] = useState(0)
   const [lockPwdInput, setLockPwdInput] = useState<{ id: number; mode: 'lock' | 'unlock' } | null>(null)
   const [pwdValue, setPwdValue] = useState('')
   const [menuId, setMenuId] = useState<number | null>(null)
 
-  useEffect(() => {
-    ;(async () => {
-      const map: Record<number, Participant[]> = {}
-      for (const m of meetings) {
-        map[m.id] = await window.api.participants.getByMeeting(m.id)
-      }
-      setParticipants(map)
-    })()
-  }, [meetings.length])
+  const participants = useMemo(() => {
+    const map: Record<number, Participant[]> = {}
+    allParticipants.forEach(p => {
+      if (!map[p.meetingId]) map[p.meetingId] = []
+      map[p.meetingId].push(p)
+    })
+    return map
+  }, [allParticipants])
 
   const filtered = meetings.filter(m => {
     if (search && !m.title.includes(search) && !(m.description || '').includes(search)) return false

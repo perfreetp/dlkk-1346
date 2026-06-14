@@ -137,6 +137,27 @@ function createTables() {
       createdAt TEXT DEFAULT (datetime('now','localtime')),
       FOREIGN KEY (meetingId) REFERENCES meetings(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agenda_minutes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      meetingId INTEGER NOT NULL,
+      agendaId INTEGER NOT NULL,
+      summary TEXT,
+      todos TEXT,
+      risks TEXT,
+      conclusions TEXT,
+      disputes TEXT,
+      createdAt TEXT DEFAULT (datetime('now','localtime')),
+      updatedAt TEXT DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (meetingId) REFERENCES meetings(id) ON DELETE CASCADE,
+      FOREIGN KEY (agendaId) REFERENCES agendas(id) ON DELETE CASCADE,
+      UNIQUE(meetingId, agendaId)
+    );
   `)
 }
 
@@ -549,5 +570,45 @@ export const databaseHandlers = {
         WHERE t.content LIKE ?
       `).all(like)
     }
+  },
+
+  'settings:get': (key: string) => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
+    return row ? row.value : null
+  },
+  'settings:set': (key: string, value: string) => {
+    db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value)
+    return { success: true }
+  },
+  'settings:getAll': () => {
+    const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[]
+    const result: Record<string, string> = {}
+    rows.forEach(r => { result[r.key] = r.value })
+    return result
+  },
+
+  'agendaMinutes:getByAgenda': (meetingId: number, agendaId: number) => {
+    const row = db.prepare('SELECT * FROM agenda_minutes WHERE meetingId = ? AND agendaId = ?')
+      .get(meetingId, agendaId)
+    return row || null
+  },
+  'agendaMinutes:save': (meetingId: number, agendaId: number, data: {
+    summary?: string; todos?: string; risks?: string; conclusions?: string; disputes?: string
+  }) => {
+    const existing = db.prepare('SELECT id FROM agenda_minutes WHERE meetingId = ? AND agendaId = ?')
+      .get(meetingId, agendaId)
+    if (existing) {
+      db.prepare(`UPDATE agenda_minutes SET summary = COALESCE(?, summary), todos = COALESCE(?, todos), risks = COALESCE(?, risks), conclusions = COALESCE(?, conclusions), disputes = COALESCE(?, disputes), updatedAt = datetime('now','localtime') WHERE meetingId = ? AND agendaId = ?`)
+        .run(data.summary ?? null, data.todos ?? null, data.risks ?? null, data.conclusions ?? null, data.disputes ?? null, meetingId, agendaId)
+    } else {
+      db.prepare(`INSERT INTO agenda_minutes (meetingId, agendaId, summary, todos, risks, conclusions, disputes) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(meetingId, agendaId, data.summary ?? '', data.todos ?? '', data.risks ?? '', data.conclusions ?? '', data.disputes ?? '')
+    }
+    return db.prepare('SELECT * FROM agenda_minutes WHERE meetingId = ? AND agendaId = ?').get(meetingId, agendaId)
+  },
+  'agendaMinutes:deleteByAgenda': (meetingId: number, agendaId: number) => {
+    db.prepare('DELETE FROM agenda_minutes WHERE meetingId = ? AND agendaId = ?').run(meetingId, agendaId)
+    return { success: true }
   }
 }

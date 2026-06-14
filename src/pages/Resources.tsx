@@ -23,6 +23,12 @@ const CAT_MAP: Record<string, { label: string; icon: any; color: string }> = {
 export default function Resources() {
   const meetings = useAppStore(s => s.meetings)
   const currentMeetingId = useAppStore(s => s.currentMeetingId)
+  const isLocked = useAppStore(s => s.isResourcesLocked)
+  const lockPassword = useAppStore(s => s.lockPassword)
+  const enableLock = useAppStore(s => s.enableLock)
+  const disableLock = useAppStore(s => s.disableLock)
+  const unlockResources = useAppStore(s => s.unlockResources)
+  const setResourcesLocked = useAppStore(s => s.setResourcesLocked)
 
   const [tab, setTab] = useState<ResourceTab>('attachments')
   const [meetingFilter, setMeetingFilter] = useState<number | 'all'>(currentMeetingId || 'all')
@@ -35,11 +41,10 @@ export default function Resources() {
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [chats, setChats] = useState<ChatMessage[]>([])
   const [shots, setShots] = useState<Screenshot[]>([])
-  const [isLocked, setIsLocked] = useState(false)
-  const [lockPwd, setLockPwd] = useState('')
   const [pwdInput, setPwdInput] = useState('')
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [showLockModal, setShowLockModal] = useState(false)
+  const [lockFormPwd, setLockFormPwd] = useState('')
   const [toast, setToast] = useState('')
 
   const showToast = (msg: string) => {
@@ -143,20 +148,286 @@ export default function Resources() {
     return meetings.find(m => m.id === mid)?.title || `会议#${mid}`
   }
 
+  const buildMeetingReport = async (m: Meeting) => {
+    const [parts, agendas, mins, tasks, atts, transcripts] = await Promise.all([
+      window.api.participants.getByMeeting(m.id),
+      window.api.agendas.getByMeeting(m.id),
+      window.api.minutes.getByMeeting(m.id),
+      window.api.tasks.getByMeeting(m.id),
+      window.api.attachments.getByMeeting(m.id),
+      window.api.transcripts.getByMeeting(m.id)
+    ])
+    return { meeting: m, participants: parts, agendas, minutes: mins, tasks, attachments: atts, transcripts }
+  }
+
   const exportWord = async () => {
     const m = meetingFilter === 'all' ? meetings[0] : meetings.find(x => x.id === meetingFilter)
-    if (!m) return
+    if (!m) { alert('请选择会议'); return }
     showToast(`正在生成《${m.title}》Word 文档...`)
-    await new Promise(r => setTimeout(r, 1000))
-    showToast('Word 文档生成成功，已保存到下载目录')
+    try {
+      const data = await buildMeetingReport(m)
+      const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TabStopPosition, TabStopType, BorderStyle } = await import('docx')
+
+      const children: any[] = []
+
+      children.push(new Paragraph({
+        text: m.title,
+        heading: HeadingLevel.TITLE,
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 400 }
+      }))
+
+      children.push(new Paragraph({
+        children: [
+          new TextRun({ text: '会议时间：', bold: true }),
+          new TextRun(`${formatDateTime(m.startTime)}${m.endTime ? ' ~ ' + formatDateTime(m.endTime) : ''}`)
+        ],
+        spacing: { after: 120 }
+      }))
+      children.push(new Paragraph({
+        children: [
+          new TextRun({ text: '会议地点：', bold: true }),
+          new TextRun(m.location || '-')
+        ],
+        spacing: { after: 120 }
+      }))
+      children.push(new Paragraph({
+        children: [
+          new TextRun({ text: '参会人员：', bold: true }),
+          new TextRun(data.participants.map(p => `${p.name}${p.role ? `(${p.role})` : ''}`).join('、') || '-')
+        ],
+        spacing: { after: 400 }
+      }))
+
+      children.push(new Paragraph({ text: '一、会议摘要', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      if (data.minutes?.summary) {
+        const summaries: string[] = JSON.parse(data.minutes.summary)
+        summaries.forEach((s, i) => {
+          children.push(new Paragraph({
+            children: [new TextRun(`${i + 1}. ${s}`)],
+            spacing: { after: 100 }
+          }))
+        })
+      } else {
+        children.push(new Paragraph({ text: '暂无摘要', spacing: { after: 100 } }))
+      }
+
+      children.push(new Paragraph({ text: '二、会议议题', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      if (data.agendas.length > 0) {
+        data.agendas.forEach((a, i) => {
+          children.push(new Paragraph({
+            children: [new TextRun(`${i + 1}. ${a.title}`)],
+            spacing: { after: 80 }
+          }))
+        })
+      } else {
+        children.push(new Paragraph({ text: '暂无议题' }))
+      }
+
+      children.push(new Paragraph({ text: '三、待办事项', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      if (data.tasks.length > 0) {
+        data.tasks.forEach((t, i) => {
+          children.push(new Paragraph({
+            children: [
+              new TextRun(`${i + 1}. ${t.title}`),
+              new TextRun({ text: `  负责人：${t.assignee || '未分配'}`, color: '666666', size: 20 }),
+              new TextRun({ text: `  截止：${t.dueDate ? formatDate(t.dueDate) : '未设置'}`, color: '666666', size: 20 }),
+            ],
+            spacing: { after: 80 }
+          }))
+        })
+      } else {
+        children.push(new Paragraph({ text: '暂无待办' }))
+      }
+
+      children.push(new Paragraph({ text: '四、风险点', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      if (data.minutes?.risks) {
+        const risks: any[] = JSON.parse(data.minutes.risks)
+        risks.forEach((r, i) => {
+          children.push(new Paragraph({
+            children: [
+              new TextRun(`${i + 1}. [${{ low: '低', medium: '中', high: '高' }[r.level] || '中'}风险] `),
+              new TextRun(r.content)
+            ],
+            spacing: { after: 80 }
+          }))
+        })
+      } else {
+        children.push(new Paragraph({ text: '暂无风险点' }))
+      }
+
+      children.push(new Paragraph({ text: '五、会议结论', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      if (data.minutes?.conclusions) {
+        const cs: any[] = JSON.parse(data.minutes.conclusions)
+        cs.forEach((c, i) => {
+          children.push(new Paragraph({
+            children: [new TextRun(`${i + 1}. ${c.content}`)],
+            spacing: { after: 80 }
+          }))
+        })
+      } else {
+        children.push(new Paragraph({ text: '暂无结论' }))
+      }
+
+      children.push(new Paragraph({ text: '六、附件清单', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+      if (data.attachments.length > 0) {
+        data.attachments.forEach((a, i) => {
+          children.push(new Paragraph({
+            children: [
+              new TextRun(`${i + 1}. ${a.fileName}`),
+              new TextRun({ text: `  ${formatFileSize(a.fileSize)}`, color: '999999', size: 20 })
+            ],
+            spacing: { after: 60 }
+          }))
+        })
+      } else {
+        children.push(new Paragraph({ text: '暂无附件' }))
+      }
+
+      if (data.transcripts.length > 0) {
+        children.push(new Paragraph({ text: '七、会议转写', heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 200 } }))
+        data.transcripts.forEach(t => {
+          children.push(new Paragraph({
+            children: [
+              new TextRun({ text: `${t.speaker || '未知'}：`, bold: true, color: '2563eb' }),
+              new TextRun(t.content)
+            ],
+            spacing: { after: 80 }
+          }))
+        })
+      }
+
+      const doc = new Document({ sections: [{ properties: {}, children }] })
+      const buffer = await Packer.toBuffer(doc)
+
+      const safeName = m.title.replace(/[\\/:*?"<>|]/g, '_')
+      const saveRes = await window.api.dialog.saveFile({
+        defaultPath: `${safeName} - 会议纪要.docx`,
+        filters: [{ name: 'Word 文档', extensions: ['docx'] }]
+      })
+      if (saveRes.canceled || !saveRes.filePath) { showToast('已取消导出'); return }
+
+      await window.api.file.write(saveRes.filePath, new Uint8Array(buffer))
+      showToast('Word 文档生成成功！')
+
+      if (confirm('导出成功！是否立即打开文件？')) {
+        await window.api.file.open(saveRes.filePath)
+      }
+    } catch (e: any) {
+      console.error(e)
+      showToast('导出失败：' + (e.message || e))
+    }
   }
 
   const exportPDF = async () => {
     const m = meetingFilter === 'all' ? meetings[0] : meetings.find(x => x.id === meetingFilter)
-    if (!m) return
+    if (!m) { alert('请选择会议'); return }
     showToast(`正在生成《${m.title}》PDF 文档...`)
-    await new Promise(r => setTimeout(r, 1000))
-    showToast('PDF 文档生成成功，已保存到下载目录')
+    try {
+      const data = await buildMeetingReport(m)
+      const { default: jsPDF } = await import('jspdf')
+
+      const doc = new jsPDF()
+      const pageWidth = doc.internal.pageSize.getWidth()
+      const margin = 20
+      let y = margin
+
+      const addText = (text: string, opts?: { size?: number; bold?: boolean; color?: string; indent?: number; spacing?: number }) => {
+        const { size = 12, bold = false, color = '#000000', indent = 0, spacing = 2 } = opts || {}
+        doc.setFontSize(size)
+        doc.setFont('helvetica', bold ? 'bold' : 'normal')
+        doc.setTextColor(color)
+        const x = margin + indent
+        const maxWidth = pageWidth - margin * 2 - indent
+        const lines = doc.splitTextToSize(text, maxWidth)
+        lines.forEach((line: string) => {
+          if (y > 270) { doc.addPage(); y = margin }
+          doc.text(line, x, y)
+          y += size / 2.5 + spacing
+        })
+      }
+
+      addText(m.title, { size: 20, bold: true, spacing: 10 })
+      y += 4
+
+      addText(`会议时间：${formatDateTime(m.startTime)}${m.endTime ? ' ~ ' + formatDateTime(m.endTime) : ''}`, { size: 11, color: '#555555' })
+      addText(`会议地点：${m.location || '-'}`, { size: 11, color: '#555555' })
+      addText(`参会人员：${data.participants.map(p => p.name).join('、') || '-'}`, { size: 11, color: '#555555' })
+      y += 6
+
+      addText('一、会议摘要', { size: 14, bold: true, spacing: 3 })
+      if (data.minutes?.summary) {
+        const summaries: string[] = JSON.parse(data.minutes.summary)
+        summaries.forEach((s, i) => addText(`${i + 1}. ${s}`, { size: 11, indent: 4 }))
+      } else {
+        addText('暂无摘要', { size: 11, indent: 4, color: '#999999' })
+      }
+      y += 4
+
+      addText('二、会议议题', { size: 14, bold: true, spacing: 3 })
+      if (data.agendas.length > 0) {
+        data.agendas.forEach((a, i) => addText(`${i + 1}. ${a.title}`, { size: 11, indent: 4 }))
+      } else {
+        addText('暂无议题', { size: 11, indent: 4, color: '#999999' })
+      }
+      y += 4
+
+      addText('三、待办事项', { size: 14, bold: true, spacing: 3 })
+      if (data.tasks.length > 0) {
+        data.tasks.forEach((t, i) => {
+          addText(`${i + 1}. ${t.title}`, { size: 11, indent: 4 })
+          addText(`    负责人：${t.assignee || '未分配'}  截止：${t.dueDate ? formatDate(t.dueDate) : '未设置'}`, { size: 9, color: '#666666', indent: 8 })
+        })
+      } else {
+        addText('暂无待办', { size: 11, indent: 4, color: '#999999' })
+      }
+      y += 4
+
+      addText('四、风险点', { size: 14, bold: true, spacing: 3 })
+      if (data.minutes?.risks) {
+        const risks: any[] = JSON.parse(data.minutes.risks)
+        risks.forEach((r, i) => {
+          addText(`${i + 1}. [${{ low: '低', medium: '中', high: '高' }[r.level] || '中'}风险] ${r.content}`, { size: 11, indent: 4 })
+        })
+      } else {
+        addText('暂无风险点', { size: 11, indent: 4, color: '#999999' })
+      }
+      y += 4
+
+      addText('五、会议结论', { size: 14, bold: true, spacing: 3 })
+      if (data.minutes?.conclusions) {
+        const cs: any[] = JSON.parse(data.minutes.conclusions)
+        cs.forEach((c, i) => addText(`${i + 1}. ${c.content}`, { size: 11, indent: 4 }))
+      } else {
+        addText('暂无结论', { size: 11, indent: 4, color: '#999999' })
+      }
+      y += 4
+
+      addText('六、附件清单', { size: 14, bold: true, spacing: 3 })
+      if (data.attachments.length > 0) {
+        data.attachments.forEach((a, i) => addText(`${i + 1}. ${a.fileName} (${formatFileSize(a.fileSize)})`, { size: 11, indent: 4 }))
+      } else {
+        addText('暂无附件', { size: 11, indent: 4, color: '#999999' })
+      }
+
+      const safeName = m.title.replace(/[\\/:*?"<>|]/g, '_')
+      const saveRes = await window.api.dialog.saveFile({
+        defaultPath: `${safeName} - 会议纪要.pdf`,
+        filters: [{ name: 'PDF 文档', extensions: ['pdf'] }]
+      })
+      if (saveRes.canceled || !saveRes.filePath) { showToast('已取消导出'); return }
+
+      const buffer = doc.output('arraybuffer')
+      await window.api.file.write(saveRes.filePath, new Uint8Array(buffer))
+      showToast('PDF 文档生成成功！')
+
+      if (confirm('导出成功！是否立即打开文件？')) {
+        await window.api.file.open(saveRes.filePath)
+      }
+    } catch (e: any) {
+      console.error(e)
+      showToast('导出失败：' + (e.message || e))
+    }
   }
 
   const generateEmail = async () => {
@@ -183,24 +454,23 @@ ${attList || '- （暂无附件）'}
     }
   }
 
-  const confirmLock = () => {
-    if (!lockPwd.trim()) {
+  const confirmLock = async () => {
+    if (!lockFormPwd.trim()) {
       alert('请设置密码')
       return
     }
-    setIsLocked(true)
+    await enableLock(lockFormPwd.trim())
     setShowLockModal(false)
-    setPwdInput('')
+    setLockFormPwd('')
     showToast('已启用本地权限锁定')
   }
   const unlock = () => {
-    if (pwdInput !== lockPwd) {
+    if (unlockResources(pwdInput)) {
+      setPwdInput('')
+      showToast('已解锁')
+    } else {
       alert('密码不正确')
-      return
     }
-    setIsLocked(false)
-    setPwdInput('')
-    showToast('已解锁')
   }
 
   const addChat = async () => {
@@ -298,7 +568,7 @@ ${attList || '- （暂无附件）'}
         </div>
 
         <button
-          onClick={() => setShowLockModal(true)}
+          onClick={() => { setLockFormPwd(''); setShowLockModal(true) }}
           className={cn(
             'btn',
             isLocked
@@ -641,16 +911,20 @@ ${attList || '- （暂无附件）'}
             <p className="text-sm text-slate-500 mb-4">设置密码后，查看会议资料需要先验证密码</p>
             <input
               type="password"
-              value={lockPwd}
-              onChange={e => setLockPwd(e.target.value)}
-              placeholder={isLocked ? '修改密码（留空则取消锁定）' : '设置访问密码'}
+              value={lockFormPwd}
+              onChange={e => setLockFormPwd(e.target.value)}
+              placeholder={lockPassword ? '输入新密码（留空则取消锁定）' : '设置访问密码'}
               className="input mb-4"
               autoFocus
             />
             <div className="flex justify-end gap-2">
-              {isLocked && (
+              {lockPassword && (
                 <button
-                  onClick={() => { setIsLocked(false); setLockPwd(''); setShowLockModal(false); showToast('已取消锁定') }}
+                  onClick={async () => {
+                    await disableLock()
+                    setShowLockModal(false)
+                    showToast('已取消锁定')
+                  }}
                   className="btn-danger"
                 >
                   <Unlock size={14} /> 取消锁定
@@ -658,7 +932,7 @@ ${attList || '- （暂无附件）'}
               )}
               <button onClick={() => setShowLockModal(false)} className="btn-secondary">取消</button>
               <button onClick={confirmLock} className="btn-primary">
-                {isLocked ? '修改密码' : '启用锁定'}
+                {lockPassword ? '修改密码' : '启用锁定'}
               </button>
             </div>
           </div>

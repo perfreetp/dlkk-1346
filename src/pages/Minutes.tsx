@@ -36,6 +36,7 @@ export default function Minutes() {
 
   const [agendas, setAgendas] = useState<AgendaItem[]>([])
   const [minutes, setMinutes] = useState<MeetingMinutesType | null>(null)
+  const [agendaMinutes, setAgendaMinutes] = useState<any>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [transcripts, setTranscripts] = useState<TranscriptSegment[]>([])
   const [activeTab, setActiveTab] = useState<TabKey>('summary')
@@ -43,6 +44,8 @@ export default function Minutes() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [activeAgendaId, setActiveAgendaId] = useState<number | 'all'>('all')
   const [toast, setToast] = useState<string>('')
+
+  const isAllMode = activeAgendaId === 'all'
 
   const load = async () => {
     setCurrentMeetingId(mid)
@@ -59,16 +62,36 @@ export default function Minutes() {
     const exp: Record<number, boolean> = {}
     ;(ag as AgendaItem[]).forEach(a => { exp[a.id] = true })
     setExpandedAgendas(exp)
-    if (ag.length > 0) setActiveAgendaId(ag[0].id)
+    if (ag.length > 0) {
+      setActiveAgendaId(ag[0].id)
+      loadAgendaMinutes(mid, ag[0].id)
+    }
+  }
+
+  const loadAgendaMinutes = async (meetingId: number, agendaId: number) => {
+    try {
+      const data = await window.api.agendaMinutes.getByAgenda(meetingId, agendaId)
+      setAgendaMinutes(data)
+    } catch (e) {
+      setAgendaMinutes(null)
+    }
   }
 
   useEffect(() => { load() }, [mid])
 
-  const summaries = useMemo<string[]>(() => safeParseJSON(minutes?.summary, []), [minutes?.summary])
-  const todos = useMemo<TodoItem[]>(() => safeParseJSON(minutes?.todos, []), [minutes?.todos])
-  const risks = useMemo<RiskItem[]>(() => safeParseJSON(minutes?.risks, []), [minutes?.risks])
-  const conclusions = useMemo<SimpleItem[]>(() => safeParseJSON(minutes?.conclusions, []), [minutes?.conclusions])
-  const disputes = useMemo<SimpleItem[]>(() => safeParseJSON(minutes?.disputes, []), [minutes?.disputes])
+  useEffect(() => {
+    if (activeAgendaId !== 'all') {
+      loadAgendaMinutes(mid, activeAgendaId)
+    }
+  }, [activeAgendaId, mid])
+
+  const effectiveMinutes = isAllMode ? minutes : agendaMinutes
+
+  const summaries = useMemo<string[]>(() => safeParseJSON(effectiveMinutes?.summary, []), [effectiveMinutes?.summary])
+  const todos = useMemo<TodoItem[]>(() => safeParseJSON(effectiveMinutes?.todos, []), [effectiveMinutes?.todos])
+  const risks = useMemo<RiskItem[]>(() => safeParseJSON(effectiveMinutes?.risks, []), [effectiveMinutes?.risks])
+  const conclusions = useMemo<SimpleItem[]>(() => safeParseJSON(effectiveMinutes?.conclusions, []), [effectiveMinutes?.conclusions])
+  const disputes = useMemo<SimpleItem[]>(() => safeParseJSON(effectiveMinutes?.disputes, []), [effectiveMinutes?.disputes])
 
   const showToast = (msg: string) => {
     setToast(msg)
@@ -76,20 +99,25 @@ export default function Minutes() {
   }
 
   const saveMinutes = async (patch: Partial<MeetingMinutesType>) => {
-    if (minutes) {
-      const updated = await window.api.minutes.update(minutes.id, patch)
-      setMinutes(updated)
+    if (isAllMode) {
+      if (minutes) {
+        const updated = await window.api.minutes.update(minutes.id, patch)
+        setMinutes(updated)
+      } else {
+        const created = await window.api.minutes.create({
+          meetingId: mid,
+          summary: '[]',
+          todos: '[]',
+          risks: '[]',
+          conclusions: '[]',
+          disputes: '[]',
+          ...patch
+        })
+        setMinutes(created)
+      }
     } else {
-      const created = await window.api.minutes.create({
-        meetingId: mid,
-        summary: '[]',
-        todos: '[]',
-        risks: '[]',
-        conclusions: '[]',
-        disputes: '[]',
-        ...patch
-      })
-      setMinutes(created)
+      const saved = await window.api.agendaMinutes.save(mid, activeAgendaId as number, patch)
+      setAgendaMinutes(saved)
     }
   }
 
@@ -106,31 +134,34 @@ export default function Minutes() {
     setIsGenerating(true)
     await new Promise(r => setTimeout(r, 1500))
 
+    const currentTitle = isAllMode
+      ? meeting?.title || '主题讨论'
+      : agendas.find(a => a.id === activeAgendaId)?.title || '当前议题'
+
     const sample = transcripts.slice(0, 6).map(t => t.content)
     const genSummaries = [
-      `本次会议围绕"${meeting?.title || '主题讨论'}"展开，明确了 Q2 的核心方向为体验优化优先。`,
-      '技术团队对当前性能问题进行了全面分析，确定了首屏加载、接口响应、交互流畅度为三大改进点。',
-      '已成立专项小组，由技术负责人牵头，下周一前交付完整的技术方案与排期。'
+      `本议题围绕"${currentTitle}"展开，明确了核心方向与关键行动项。`,
+      '团队对当前问题进行了全面分析，确定了三个优先改进方向。',
+      '已成立专项工作小组，由负责人牵头，本周内交付初步方案。'
     ]
     const genTodos: TodoItem[] = [
-      { content: '输出性能优化专项技术方案', assignee: participants[2]?.name || '技术负责人', dueDate: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10) },
-      { content: '整理客户定制化需求清单', assignee: participants[1]?.name || '产品总监', dueDate: new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10) },
-      { content: '准备下周项目评审材料', assignee: participants[0]?.name || '项目经理' },
-      { content: '评估并引入性能监控平台方案', assignee: participants[3]?.name || '前端工程师' }
+      { content: `输出${currentTitle}专项技术方案`, assignee: participants[2]?.name || '技术负责人', dueDate: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10) },
+      { content: '整理需求清单与优先级排序', assignee: participants[1]?.name || '产品总监', dueDate: new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10) },
+      { content: '准备评审材料与演示 Demo', assignee: participants[0]?.name || '项目经理' }
     ]
     const genRisks: RiskItem[] = [
-      { content: '第三方支付接口稳定性不足，存在交易失败风险', level: 'high' },
-      { content: '性能优化可能影响既有功能，需建立回归测试机制', level: 'medium' },
-      { content: '核心开发资源紧张，人员变动可能延期交付', level: 'medium' }
+      { content: '外部依赖接口存在稳定性风险，可能影响进度', level: 'high' },
+      { content: '方案调整可能影响既有功能，需建立回归测试机制', level: 'medium' },
+      { content: '核心人力紧张，人员变动可能导致延期', level: 'medium' }
     ]
     const genConclusions: SimpleItem[] = [
-      { content: 'Q2 优先级调整：性能优化 > 新功能开发' },
-      { content: '每周五下午召开项目进度同步例会' },
-      { content: '性能方案通过后立即启动开发，目标 6 周内上线' }
+      { content: '优先级确认：方案质量 > 交付速度' },
+      { content: '每周三下午召开议题进度同步会' },
+      { content: '方案通过后立即启动，目标 4 周内完成' }
     ]
     const genDisputes: SimpleItem[] = [
-      { content: '关于首页改版方案：设计部倾向交互创新，产品部担心学习成本过高，需会后小范围拉通' },
-      { content: '技术选型：是否引入微前端架构，技术团队内部存在不同意见' }
+      { content: '实现方案：一部分倾向快速迭代，一部分倾向方案先行，需会后小范围拉通' },
+      { content: '技术选型：团队内部存在不同意见，需进一步评估' }
     ]
 
     await saveMinutes({
@@ -140,7 +171,6 @@ export default function Minutes() {
       conclusions: JSON.stringify(genConclusions),
       disputes: JSON.stringify(genDisputes)
     })
-    await load()
     setIsGenerating(false)
     showToast('AI 智能生成完成！')
   }

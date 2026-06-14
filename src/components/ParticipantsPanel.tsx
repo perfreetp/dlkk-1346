@@ -1,24 +1,28 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { Plus, X, UserPlus, Crown, Mail, Trash2 } from 'lucide-react'
 import type { Participant } from '@/types'
 import { avatarColor } from '@/utils'
+import { useAppStore } from '@/store'
 
 interface Props {
   meetingId: number
 }
 
 export default function ParticipantsPanel({ meetingId }: Props) {
-  const [list, setList] = useState<Participant[]>([])
+  const allParticipants = useAppStore(s => s.participants)
+  const addParticipant = useAppStore(s => s.addParticipant)
+  const removeParticipant = useAppStore(s => s.removeParticipant)
+  const updateParticipant = useAppStore(s => s.updateParticipant)
+
+  const list = useMemo(
+    () => allParticipants.filter(p => p.meetingId === meetingId),
+    [allParticipants, meetingId]
+  )
+
   const [showAdd, setShowAdd] = useState(false)
   const [name, setName] = useState('')
   const [role, setRole] = useState('参会人')
   const [email, setEmail] = useState('')
-
-  const load = async () => {
-    const data = await window.api.participants.getByMeeting(meetingId)
-    setList(data as Participant[])
-  }
-  useEffect(() => { load() }, [meetingId])
 
   const add = async () => {
     if (!name.trim()) return
@@ -29,21 +33,22 @@ export default function ParticipantsPanel({ meetingId }: Props) {
       email: email.trim() || undefined,
       isHost: list.length === 0 ? 1 : 0
     })
-    setList(l => [...l, newP as Participant])
+    addParticipant(newP as Participant)
     setName(''); setRole('参会人'); setEmail(''); setShowAdd(false)
   }
 
   const remove = async (id: number) => {
     if (!confirm('确定移除该参会人？')) return
     await window.api.participants.delete(id)
-    setList(l => l.filter(p => p.id !== id))
+    removeParticipant(id)
   }
 
   const setHost = async (id: number) => {
-    for (const p of list) {
-      await window.api.participants.update(p.id, { isHost: p.id === id ? 1 : 0 })
+    const currentList = allParticipants.filter(p => p.meetingId === meetingId)
+    for (const p of currentList) {
+      const updated = await window.api.participants.update(p.id, { isHost: p.id === id ? 1 : 0 })
+      updateParticipant(updated)
     }
-    await load()
   }
 
   return (

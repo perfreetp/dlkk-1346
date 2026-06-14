@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import path from 'path'
+import fs from 'fs/promises'
 import { fileURLToPath } from 'url'
 import { initDatabase, databaseHandlers } from './database'
 
@@ -70,4 +71,19 @@ ipcMain.handle('dialog:saveFile', async (_event, options: { defaultPath?: string
 
 ipcMain.handle('app:getPath', async (_event, name: any) => {
   return app.getPath(name)
+})
+
+ipcMain.handle('file:write', async (_event, filePath: string, data: string | Uint8Array, encoding?: BufferEncoding) => {
+  await fs.writeFile(filePath, data, encoding as any)
+  return { success: true }
+})
+
+ipcMain.handle('file:open', async (_event, filePath: string) => {
+  const res = await shell.openPath(filePath)
+  return { success: !res, error: res }
+})
+
+ipcMain.handle('file:showInFolder', async (_event, filePath: string) => {
+  shell.showItemInFolder(filePath)
+  return { success: true }
 })

@@ -56,9 +56,11 @@ export default function Recording() {
   const [waveform, setWaveform] = useState<number[]>(Array(40).fill(20))
   const [searchText, setSearchText] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
+  const [autoTranscribeIdx, setAutoTranscribeIdx] = useState(0)
 
   const timerRef = useRef<number | null>(null)
   const waveRef = useRef<number | null>(null)
+  const transcribeRef = useRef<number | null>(null)
   const transcriptEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -84,14 +86,19 @@ export default function Recording() {
       waveRef.current = window.setInterval(() => {
         setWaveform(prev => prev.map((_, i) => 15 + Math.random() * 60 + Math.sin((Date.now() + i * 200) / 300) * 15))
       }, 80)
+      transcribeRef.current = window.setInterval(() => {
+        appendNextTranscript()
+      }, 4000)
     } else {
       if (timerRef.current) clearInterval(timerRef.current)
       if (waveRef.current) clearInterval(waveRef.current)
+      if (transcribeRef.current) clearInterval(transcribeRef.current)
       setWaveform(prev => prev.map(() => 20))
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current)
       if (waveRef.current) clearInterval(waveRef.current)
+      if (transcribeRef.current) clearInterval(transcribeRef.current)
     }
   }, [status])
 
@@ -104,33 +111,31 @@ export default function Recording() {
     setStatus('idle')
   }
 
-  const simulateTranscript = async () => {
-    if (status !== 'recording') return
-    setIsGenerating(true)
-    const startIdx = segments.length
-    const nextBatch = MOCK_TRANSCRIPTS.slice(startIdx, startIdx + 3)
-    if (nextBatch.length === 0) {
-      setIsGenerating(false)
+  const appendNextTranscript = async () => {
+    const idx = segments.length
+    if (idx >= MOCK_TRANSCRIPTS.length) {
+      if (transcribeRef.current) {
+        clearInterval(transcribeRef.current)
+        transcribeRef.current = null
+      }
       return
     }
-    const baseTime = elapsed
-    const newSegs = nextBatch.map((s, i) => {
-      const color = SPEAKER_COLORS[participants.findIndex(p => p.name === s.speaker) % SPEAKER_COLORS.length] || SPEAKER_COLORS[0]
-      const kws = KEYWORDS_POOL.filter(k => s.content.includes(k))
-      return {
-        meetingId: mid,
-        speaker: s.speaker,
-        speakerColor: color,
-        content: s.content,
-        startTime: baseTime + i * 30,
-        endTime: baseTime + i * 30 + 25,
-        keywords: kws.length ? JSON.stringify(kws) : undefined
-      }
-    })
-    await window.api.transcripts.createBatch(newSegs)
+    const next = MOCK_TRANSCRIPTS[idx]
+    const colorIdx = participants.findIndex(p => p.name === next.speaker)
+    const color = SPEAKER_COLORS[colorIdx % SPEAKER_COLORS.length] || SPEAKER_COLORS[0]
+    const kws = KEYWORDS_POOL.filter(k => next.content.includes(k))
+    const seg = {
+      meetingId: mid,
+      speaker: next.speaker,
+      speakerColor: color,
+      content: next.content,
+      startTime: elapsed,
+      endTime: elapsed + 8,
+      keywords: kws.length ? JSON.stringify(kws) : undefined
+    }
+    await window.api.transcripts.create(seg)
     const updated = await window.api.transcripts.getByMeeting(mid)
     setSegments(updated as TranscriptSegment[])
-    setIsGenerating(false)
   }
 
   const importAudio = async () => {
@@ -342,14 +347,6 @@ export default function Recording() {
                 </button>
               )}
               <button
-                onClick={simulateTranscript}
-                disabled={isGenerating}
-                className="px-5 py-2.5 rounded-full bg-primary-600 hover:bg-primary-700 text-white font-medium inline-flex items-center gap-2 shadow-lg transition disabled:opacity-60"
-              >
-                <Sparkles size={18} className={isGenerating ? 'animate-spin' : ''} />
-                {isGenerating ? 'AI 转写中...' : '模拟 AI 转写'}
-              </button>
-              <button
                 onClick={stopRecording}
                 className="px-5 py-2.5 rounded-full bg-slate-700 hover:bg-slate-600 text-white font-medium inline-flex items-center gap-2 transition"
               >
@@ -358,6 +355,21 @@ export default function Recording() {
             </>
           )}
         </div>
+        {status !== 'idle' && (
+          <div className="mt-3 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+            {status === 'recording' ? (
+              <>
+                <Sparkles size={12} className="text-primary-400 animate-pulse" />
+                AI 实时转写中，每 4 秒生成一条 · 已转写 {segments.length} 条
+              </>
+            ) : (
+              <>
+                <Pause size={12} className="text-amber-400" />
+                已暂停 · 点"续录"继续转写
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-hidden flex">

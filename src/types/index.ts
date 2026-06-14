@@ -191,6 +191,21 @@ declare global {
       app: {
         getPath: (name: string) => Promise<string>
       }
+      file: {
+        write: (filePath: string, data: string | Uint8Array, encoding?: string) => Promise<{ success: boolean }>
+        open: (filePath: string) => Promise<{ success: boolean; error?: string }>
+        showInFolder: (filePath: string) => Promise<{ success: boolean }>
+      }
+      settings: {
+        get: (key: string) => Promise<string | null>
+        set: (key: string, value: string) => Promise<{ success: boolean }>
+        getAll: () => Promise<Record<string, string>>
+      }
+      agendaMinutes: {
+        getByAgenda: (meetingId: number, agendaId: number) => Promise<any>
+        save: (meetingId: number, agendaId: number, data: any) => Promise<any>
+        deleteByAgenda: (meetingId: number, agendaId: number) => Promise<{ success: boolean }>
+      }
     }
   }
 }
