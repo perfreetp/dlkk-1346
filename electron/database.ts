@@ -166,6 +166,8 @@ function createTables() {
       format TEXT NOT NULL,
       filePath TEXT NOT NULL,
       fileSize INTEGER,
+      note TEXT,
+      status TEXT DEFAULT 'pending',
       createdAt TEXT DEFAULT (datetime('now','localtime')),
       FOREIGN KEY (meetingId) REFERENCES meetings(id) ON DELETE CASCADE
     );
@@ -641,13 +643,25 @@ export const databaseHandlers = {
     return { success: true }
   },
 
-  'exportRecords:list': (limit = 50) => {
-    return db.prepare('SELECT * FROM export_records ORDER BY createdAt DESC LIMIT ?').all(limit)
+  'exportRecords:list': (limit = 50, filter?: { meetingId?: number; format?: string; status?: string }) => {
+    let sql = 'SELECT * FROM export_records WHERE 1=1'
+    const params: any[] = []
+    if (filter?.meetingId) { sql += ' AND meetingId = ?'; params.push(filter.meetingId) }
+    if (filter?.format) { sql += ' AND format = ?'; params.push(filter.format) }
+    if (filter?.status) { sql += ' AND status = ?'; params.push(filter.status) }
+    sql += ' ORDER BY createdAt DESC LIMIT ?'
+    params.push(limit)
+    return db.prepare(sql).all(...params)
   },
-  'exportRecords:create': (data: { meetingId: number; meetingTitle: string; format: string; filePath: string; fileSize?: number }) => {
-    const info = db.prepare('INSERT INTO export_records (meetingId, meetingTitle, format, filePath, fileSize) VALUES (?, ?, ?, ?, ?)')
-      .run(data.meetingId, data.meetingTitle, data.format, data.filePath, data.fileSize ?? null)
+  'exportRecords:create': (data: { meetingId: number; meetingTitle: string; format: string; filePath: string; fileSize?: number; note?: string; status?: string }) => {
+    const info = db.prepare('INSERT INTO export_records (meetingId, meetingTitle, format, filePath, fileSize, note, status) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(data.meetingId, data.meetingTitle, data.format, data.filePath, data.fileSize ?? null, data.note ?? null, data.status || 'pending')
     return db.prepare('SELECT * FROM export_records WHERE id = ?').get(info.lastInsertRowid)
+  },
+  'exportRecords:update': (id: number, data: { note?: string; status?: string }) => {
+    db.prepare('UPDATE export_records SET note = COALESCE(?, note), status = COALESCE(?, status) WHERE id = ?')
+      .run(data.note ?? null, data.status ?? null, id)
+    return db.prepare('SELECT * FROM export_records WHERE id = ?').get(id)
   },
   'exportRecords:delete': (id: number) => {
     db.prepare('DELETE FROM export_records WHERE id = ?').run(id)

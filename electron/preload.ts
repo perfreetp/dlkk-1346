@@ -125,8 +125,9 @@ const api = {
       ipcRenderer.invoke('agendaMinutes:deleteByAgenda', meetingId, agendaId)
   },
   exportRecords: {
-    list: (limit?: number) => ipcRenderer.invoke('exportRecords:list', limit),
+    list: (limit?: number, filter?: any) => ipcRenderer.invoke('exportRecords:list', limit, filter),
     create: (data: any) => ipcRenderer.invoke('exportRecords:create', data),
+    update: (id: number, data: any) => ipcRenderer.invoke('exportRecords:update', id, data),
     delete: (id: number) => ipcRenderer.invoke('exportRecords:delete', id)
   },
   participantTemplates: {
